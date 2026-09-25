@@ -26,6 +26,11 @@
         <text name="uey_purchase_title" text="Acheter un vehicule" />
         <text name="uey_purchase_confirm" text="Acheter %s pour %s ?" />
         <text name="uey_purchase_insufficient_funds" text="Fonds insuffisants." />
+        <text name="uey_purchase_failed_noYard" text="Achat echoue : ce parc n'existe plus." />
+        <text name="uey_purchase_failed_unknownItem" text="Achat echoue : ce vehicule n'est plus en vente dans ce parc." />
+        <text name="uey_purchase_failed_belowMin" text="Achat echoue : le parc a rejete votre offre." />
+        <text name="uey_purchase_failed_funds" text="Achat echoue : fonds insuffisants." />
+        <text name="uey_purchase_failed_generic" text="Achat echoue." />
 
         <!-- Yard config dialog -->
         <text name="uey_action_configureYard" text="Configurer le parc" />

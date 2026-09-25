@@ -26,6 +26,11 @@
         <text name="uey_purchase_title" text="Fahrzeug kaufen" />
         <text name="uey_purchase_confirm" text="%s fuer %s kaufen?" />
         <text name="uey_purchase_insufficient_funds" text="Nicht genuegend Geld." />
+        <text name="uey_purchase_failed_noYard" text="Kauf fehlgeschlagen: Dieser Hof existiert nicht mehr." />
+        <text name="uey_purchase_failed_unknownItem" text="Kauf fehlgeschlagen: Dieses Fahrzeug steht in diesem Hof nicht mehr zum Verkauf." />
+        <text name="uey_purchase_failed_belowMin" text="Kauf fehlgeschlagen: Der Hof hat dein Angebot abgelehnt." />
+        <text name="uey_purchase_failed_funds" text="Kauf fehlgeschlagen: Nicht genuegend Geld." />
+        <text name="uey_purchase_failed_generic" text="Kauf fehlgeschlagen." />
 
         <!-- Yard config dialog -->
         <text name="uey_action_configureYard" text="Hof konfigurieren" />

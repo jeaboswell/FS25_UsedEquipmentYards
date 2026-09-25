@@ -198,7 +198,8 @@ function HirePurchaseDialog:onClickConfirm()
     leaseDeal.farmId = farmId
 
     g_client:getServerConnection():sendEvent(
-        HirePurchaseYardEvent.new(self.yard.id, self.itemIndex, farmId, leaseDeal))
+        HirePurchaseYardEvent.new(self.yard.id, self.itemIndex, farmId, leaseDeal,
+            self.item.vehicle ~= nil and NetworkUtil.getObjectId(self.item.vehicle) or 0))
 
     HirePurchaseDialog:superClass().close(self)
 end

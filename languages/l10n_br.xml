@@ -22,6 +22,11 @@
         <text name="uey_purchase_title" text="Comprar Veículo" />
         <text name="uey_purchase_confirm" text="Comprar %s por %s?" />
         <text name="uey_purchase_insufficient_funds" text="Saldo insuficiente." />
+        <text name="uey_purchase_failed_noYard" text="Compra falhou: este pátio não existe mais." />
+        <text name="uey_purchase_failed_unknownItem" text="Compra falhou: este veículo não está mais à venda neste pátio." />
+        <text name="uey_purchase_failed_belowMin" text="Compra falhou: o pátio rejeitou sua oferta." />
+        <text name="uey_purchase_failed_funds" text="Compra falhou: saldo insuficiente." />
+        <text name="uey_purchase_failed_generic" text="Compra falhou." />
         <!-- Yard config dialog -->
         <text name="uey_action_configureYard" text="Configurar Pátio" />
         <text name="uey_config_title" text="Configuração do Pátio" />

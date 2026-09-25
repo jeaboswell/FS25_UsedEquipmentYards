@@ -28,6 +28,19 @@ function UsedEquipmentYards.getYard(yardId)
     return UsedEquipmentYards.clientYards[yardId]
 end
 
+--- Short human-readable label for a yard item / vehicle for log lines.
+function UsedEquipmentYards.itemLabel(item, vehicle)
+    vehicle = vehicle or (item ~= nil and item.vehicle) or nil
+    local name = nil
+    if vehicle ~= nil and vehicle.getFullName ~= nil then name = vehicle:getFullName() end
+    if name == nil and item ~= nil and item.xmlFilename ~= nil then
+        name = item.xmlFilename:match("([^/\\]+)%.xml$") or item.xmlFilename
+    end
+    local uid = vehicle ~= nil and vehicle.uniqueId or nil
+    if uid ~= nil then return ("'%s' (uid=%s)"):format(tostring(name or "?"), tostring(uid)) end
+    return ("'%s'"):format(tostring(name or "?"))
+end
+
 -- Recent sales memory: ring buffer of { uniqueId, price } for vehicles sold to
 -- players. Used to prevent profit from immediately selling a vehicle back.
 -- Synced to all clients and persisted to savegame.
@@ -346,7 +359,7 @@ end
 
 UsedEquipmentYards.vehicleToItem = {}
 
--- Client-side item registry: { [yardId] = { [itemIndex] = item } }
+-- Client-side item registry: { [yardId] = { [vehicleObjectId] = item } }
 -- On the server, items live in YardInventory. On remote clients, this
 -- table holds lightweight copies synced via VehicleItemSyncEvent.
 UsedEquipmentYards.clientItems = {}
@@ -379,6 +392,36 @@ end
 
 function UsedEquipmentYards.findItemForVehicle(vehicle)
     return UsedEquipmentYards.vehicleToItem[vehicle]
+end
+
+--- Resolve a yard item on the SERVER from a vehicle network object id.
+--- Returns item, itemIndex (current server index) or nil if not found in that yard.
+function UsedEquipmentYards.resolveServerItem(yard, vehicleObjectId)
+    if yard == nil or vehicleObjectId == nil or vehicleObjectId == 0 then return nil end
+    local vehicle = NetworkUtil.getObject(vehicleObjectId)
+    if vehicle == nil then return nil end
+    for i, item in ipairs(yard.inventory.items) do
+        if item.vehicle == vehicle then return item, i end
+    end
+    return nil
+end
+
+--- Resolve a client-side item copy from a vehicle network object id.
+--- Returns item, key (the client's storage key) or nil.
+function UsedEquipmentYards.resolveClientItem(yardId, vehicleObjectId)
+    if vehicleObjectId == nil or vehicleObjectId == 0 then return nil end
+    local yardItems = UsedEquipmentYards.clientItems[yardId]
+    if yardItems == nil then return nil end
+    -- Items are keyed by object id — direct hit is the common case.
+    local item = yardItems[vehicleObjectId]
+    if item ~= nil then return item, vehicleObjectId end
+    -- Fallback: scan by vehicle object for legacy/foreign-keyed entries.
+    local vehicle = NetworkUtil.getObject(vehicleObjectId)
+    if vehicle == nil then return nil end
+    for idx, it in pairs(yardItems) do
+        if it.vehicle == vehicle then return it, idx end
+    end
+    return nil
 end
 
 --- Assign a fresh random license plate. Vehicles spawn with ownerFarmId=0 so
@@ -422,16 +465,53 @@ end
 
 --- Called on remote clients when the server syncs a yard vehicle's item data.
 --- Creates the vehicle→item mapping and registers a YardVehicleActivatable.
+--- Items are keyed by the vehicle's network object id — the server's array
+--- index drifts between server and clients as items are removed.
 function UsedEquipmentYards.registerClientItem(yardId, itemIndex, item)
     if item.vehicle == nil then return end
 
-    item.itemIndex = itemIndex
+    local objId = NetworkUtil.getObjectId(item.vehicle)
+    if objId == nil then return end
+
+    item.itemIndex = itemIndex -- informational only; storage keys are object ids
+
+    local yard = UsedEquipmentYards.getYard(yardId)
+    if yard == nil then
+        -- Create a minimal yard object if we don't have one yet.
+        yard = { id = yardId, inventory = { items = {} } }
+    end
 
     -- Store in client item registry.
     if UsedEquipmentYards.clientItems[yardId] == nil then
         UsedEquipmentYards.clientItems[yardId] = {}
     end
-    UsedEquipmentYards.clientItems[yardId][itemIndex] = item
+
+    local existing = UsedEquipmentYards.vehicleToItem[item.vehicle]
+    if existing ~= nil and UsedEquipmentYards.clientVehicleActivatables[item.vehicle] ~= nil then
+        -- Re-sync of a vehicle we already track — update the stored item in
+        -- place so the activatable, price tag and dialog references stay valid.
+        local priceChanged = existing.price ~= item.price
+        existing.price             = item.price
+        existing.minPrice          = item.minPrice
+        existing.numOwners         = item.numOwners
+        existing.damage            = item.damage
+        existing.wear              = item.wear
+        existing.operatingTime     = item.operatingTime
+        existing.testDrive         = item.testDrive
+        existing.testDrivenByFarms = item.testDrivenByFarms
+        existing.itemIndex         = itemIndex
+        UsedEquipmentYards.clientItems[yardId][objId] = existing
+        yard.inventory.items[objId] = existing
+        if priceChanged and existing.testDrive == nil then
+            PriceTagRenderer.removeTag(item.vehicle)
+            PriceTagRenderer.addTag(item.vehicle, existing)
+        end
+        return
+    end
+
+    -- New item.
+    UsedEquipmentYards.clientItems[yardId][objId] = item
+    yard.inventory.items[objId] = item
 
     -- Map vehicle → item (for HUD and lookups).
     UsedEquipmentYards.vehicleToItem[item.vehicle] = item
@@ -446,26 +526,9 @@ function UsedEquipmentYards.registerClientItem(yardId, itemIndex, item)
 
     -- Register activatable if not already present.
     if UsedEquipmentYards.clientVehicleActivatables[item.vehicle] == nil then
-        local yard = UsedEquipmentYards.getYard(yardId)
-        if yard == nil then
-            -- Create a minimal yard object if we don't have one yet.
-            yard = { id = yardId, inventory = { items = {} } }
-        end
-        -- Store item in yard inventory items at the right index for BarterDialog.
-        yard.inventory.items[itemIndex] = item
-
         local activatable = YardVehicleActivatable.new(yard, item)
         UsedEquipmentYards.clientVehicleActivatables[item.vehicle] = activatable
         g_currentMission.activatableObjectsSystem:addActivatable(activatable)
-    else
-        -- Update existing item data (e.g. test drive state change).
-        local existingItem = UsedEquipmentYards.clientItems[yardId][itemIndex]
-        if existingItem ~= nil then
-            existingItem.price             = item.price
-            existingItem.minPrice          = item.minPrice
-            existingItem.testDrive         = item.testDrive
-            existingItem.testDrivenByFarms = item.testDrivenByFarms
-        end
     end
 end
 
@@ -479,19 +542,17 @@ function UsedEquipmentYards.addPendingClientItem(yardId, itemIndex, vehicleObjec
     }
 end
 
---- Remove a client-side item (e.g. after purchase).
-function UsedEquipmentYards.removeClientItem(yardId, itemIndex)
-    local yardItems = UsedEquipmentYards.clientItems[yardId]
-    if yardItems == nil then return end
-    local item = yardItems[itemIndex]
-    if item == nil then return end
-
-    -- Clean up vehicle state.
-    if item.vehicle ~= nil then
-        local vehicle = item.vehicle
-        PriceTagRenderer.removeTag(vehicle)
-        UsedEquipmentYards.restoreLicensePlate(vehicle)
-        UsedEquipmentYards.clearVehicleRestrictions(vehicle)
+--- Clean up one client item: price tag, vehicle restrictions, activatable,
+--- and the vehicle→item mapping. A deleted vehicle is only unmapped — its
+--- spec data and methods may already be gone.
+local function cleanupClientItem(yardId, yardItems, key, item)
+    local vehicle = item.vehicle
+    if vehicle ~= nil then
+        if not vehicle.isDeleted then
+            PriceTagRenderer.removeTag(vehicle)
+            UsedEquipmentYards.restoreLicensePlate(vehicle)
+            UsedEquipmentYards.clearVehicleRestrictions(vehicle)
+        end
 
         local activatable = UsedEquipmentYards.clientVehicleActivatables[vehicle]
         if activatable ~= nil then
@@ -501,7 +562,57 @@ function UsedEquipmentYards.removeClientItem(yardId, itemIndex)
         UsedEquipmentYards.vehicleToItem[vehicle] = nil
     end
 
-    yardItems[itemIndex] = nil
+    yardItems[key] = nil
+    local yard = UsedEquipmentYards.clientYards[yardId]
+    if yard ~= nil and yard.inventory ~= nil and yard.inventory.items ~= nil then
+        yard.inventory.items[key] = nil
+    end
+end
+
+--- Remove a client-side item (e.g. after purchase).
+--- The client's storage key is the vehicle's network object id — the server's
+--- array index drifts between server and clients and is not usable here.
+function UsedEquipmentYards.removeClientItem(yardId, itemIndex, vehicleObjectId)
+    if vehicleObjectId == nil or vehicleObjectId == 0 then
+        Logging.warning("[UsedEquipmentYards] removeClientItem without vehicleObjectId — ignored")
+        return
+    end
+
+    -- Purge any pending item for this vehicle — otherwise it can resolve
+    -- later (possibly to a different vehicle reusing the object id) and
+    -- re-register a stale entry.
+    local pending = UsedEquipmentYards.pendingClientItems
+    local i = #pending
+    while i >= 1 do
+        local entry = pending[i]
+        if entry.yardId == yardId and entry.vehicleObjectId == vehicleObjectId then
+            table.remove(pending, i)
+        end
+        i = i - 1
+    end
+
+    local yardItems = UsedEquipmentYards.clientItems[yardId]
+    if yardItems == nil then return end
+
+    local item = yardItems[vehicleObjectId]
+    local key = vehicleObjectId
+    if item == nil then
+        item, key = UsedEquipmentYards.resolveClientItem(yardId, vehicleObjectId)
+    end
+    if item ~= nil then
+        cleanupClientItem(yardId, yardItems, key, item)
+        return
+    end
+
+    -- The vehicle object is already gone (e.g. TTL expiry — the server
+    -- deletes the vehicle before broadcasting the removal). Purge every
+    -- entry in this yard whose vehicle can no longer be resolved.
+    for idx, staleItem in pairs(yardItems) do
+        local vehicle = staleItem.vehicle
+        if vehicle == nil or vehicle.isDeleted or NetworkUtil.getObjectId(vehicle) == nil then
+            cleanupClientItem(yardId, yardItems, idx, staleItem)
+        end
+    end
 end
 
 -- ---------------------------------------------------------------------------
@@ -574,9 +685,22 @@ function UsedEquipmentYards:update(dt)
         local entry = pending[i]
         local vehicle = NetworkUtil.getObject(entry.vehicleObjectId)
         if vehicle ~= nil then
-            entry.item.vehicle = vehicle
-            UsedEquipmentYards.registerClientItem(entry.yardId, entry.itemIndex, entry.item)
-            table.remove(pending, i)
+            -- Guard against object-id reuse: compare resolved store items —
+            -- raw paths differ between server and client platforms, so only
+            -- drop when BOTH sides resolve to a store item and they differ.
+            local expected = (entry.item.xmlFilename ~= nil and entry.item.xmlFilename ~= "")
+                and g_storeManager:getItemByXMLFilename(entry.item.xmlFilename) or nil
+            local actual = vehicle.configFileName ~= nil
+                and g_storeManager:getItemByXMLFilename(vehicle.configFileName) or nil
+            if expected ~= nil and actual ~= nil and expected ~= actual then
+                Logging.warning("[UsedEquipmentYards] pending yard item objectId %d resolved to a different vehicle (%s vs %s) — dropped",
+                    entry.vehicleObjectId, tostring(entry.item.xmlFilename), tostring(vehicle.configFileName))
+                table.remove(pending, i)
+            else
+                entry.item.vehicle = vehicle
+                UsedEquipmentYards.registerClientItem(entry.yardId, entry.itemIndex, entry.item)
+                table.remove(pending, i)
+            end
         end
         i = i - 1
     end

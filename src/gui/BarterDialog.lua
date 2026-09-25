@@ -320,14 +320,12 @@ function BarterDialog:onClickMakeOffer()
 
     -- Client-side accept/reject.
     if self.currentOffer >= (self.item.minPrice or self.item.price) then
-        -- Accepted — set item price to the offer and purchase.
-        local vehicleName = self.item.vehicle:getFullName()
-        local paidPrice = self.currentOffer
-        self.item.price = paidPrice
+        -- Accepted — send the offer as purchasePrice; the server re-validates
+        -- it against the minimum and confirms via PurchaseResultEvent.
+        local vehicleObjectId = self.item.vehicle ~= nil and NetworkUtil.getObjectId(self.item.vehicle) or 0
         g_client:getServerConnection():sendEvent(
-            EquipmentPurchasedEvent.new(self.yard.id, self.itemIndex, farmId))
+            EquipmentPurchasedEvent.new(self.yard.id, self.itemIndex, farmId, 0, "", self.currentOffer, vehicleObjectId))
         BarterDialog:superClass().close(self)
-        InfoDialog.show(string.format(g_i18n:getText("uey_barter_purchased"), vehicleName, g_i18n:formatMoney(paidPrice)))
     else
         self.resultText:setText(g_i18n:getText("uey_barter_rejected"))
         self:updateChancesText()
@@ -363,7 +361,8 @@ function BarterDialog:onBuyNowConfirm(confirmed)
     if farmId == nil then return end
 
     g_client:getServerConnection():sendEvent(
-        EquipmentPurchasedEvent.new(self.yard.id, self.itemIndex, farmId))
+        EquipmentPurchasedEvent.new(self.yard.id, self.itemIndex, farmId, 0, "", 0,
+            self.item.vehicle ~= nil and NetworkUtil.getObjectId(self.item.vehicle) or 0))
     BarterDialog:superClass().close(self)
 end
 
@@ -400,7 +399,8 @@ function BarterDialog:onTestDriveConfirm(confirmed)
     if farmId == nil then return end
 
     g_client:getServerConnection():sendEvent(
-        TestDriveEvent.new(self.yard.id, self.itemIndex, farmId, TestDriveEvent.ACTION_START))
+        TestDriveEvent.new(self.yard.id, self.itemIndex, farmId, TestDriveEvent.ACTION_START,
+            self.item.vehicle ~= nil and NetworkUtil.getObjectId(self.item.vehicle) or 0))
     BarterDialog:superClass().close(self)
 end
 
@@ -411,7 +411,8 @@ function BarterDialog:onReturnConfirm(confirmed)
     if farmId == nil then return end
 
     g_client:getServerConnection():sendEvent(
-        TestDriveEvent.new(self.yard.id, self.itemIndex, farmId, TestDriveEvent.ACTION_RETURN))
+        TestDriveEvent.new(self.yard.id, self.itemIndex, farmId, TestDriveEvent.ACTION_RETURN,
+            self.item.vehicle ~= nil and NetworkUtil.getObjectId(self.item.vehicle) or 0))
     BarterDialog:superClass().close(self)
 end
 

@@ -1573,6 +1573,10 @@ end
 --- keepVehicle=true when the vehicle has been purchased and should stay in the
 --- world under new ownership. Default (nil/false) deletes the vehicle (TTL expiry).
 function YardInventory:removeItem(item, keepVehicle)
+    -- Capture the vehicle's network object id before it is cleared/deleted —
+    -- clients resolve the removed item by object id, not index.
+    local vehicleObjectId = item.vehicle ~= nil and NetworkUtil.getObjectId(item.vehicle) or 0
+
     -- Unregister the purchase activatable.
     if item.activatable ~= nil then
         g_currentMission.activatableObjectsSystem:removeActivatable(item.activatable)
@@ -1613,7 +1617,7 @@ function YardInventory:removeItem(item, keepVehicle)
     -- Notify remote clients so they clean up stale item data.
     -- Skip when keepVehicle=true (purchases) — EquipmentPurchasedEvent handles that.
     if not keepVehicle and itemIndex ~= nil and g_server ~= nil then
-        g_server:broadcastEvent(VehicleItemRemovedEvent.new(self.yard.id, itemIndex))
+        g_server:broadcastEvent(VehicleItemRemovedEvent.new(self.yard.id, itemIndex, vehicleObjectId))
     end
 
     -- Space freed up — schedule pending sold items after a delay so the

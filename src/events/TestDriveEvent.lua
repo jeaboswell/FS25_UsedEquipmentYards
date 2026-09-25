@@ -19,18 +19,20 @@ function TestDriveEvent.emptyNew()
     return Event.new(TestDriveEvent_mt)
 end
 
-function TestDriveEvent.new(yardId, itemIndex, farmId, action)
+function TestDriveEvent.new(yardId, itemIndex, farmId, action, vehicleObjectId)
     local self = TestDriveEvent.emptyNew()
     self.yardId    = yardId
     self.itemIndex = itemIndex
     self.farmId    = farmId
     self.action    = action
+    self.vehicleObjectId = vehicleObjectId or 0
     return self
 end
 
 function TestDriveEvent:writeStream(streamId, connection)
     streamWriteInt32(streamId, self.yardId)
     streamWriteInt32(streamId, self.itemIndex)
+    streamWriteInt32(streamId, self.vehicleObjectId)
     streamWriteInt32(streamId, self.farmId)
     streamWriteInt32(streamId, self.action)
 end
@@ -38,6 +40,7 @@ end
 function TestDriveEvent:readStream(streamId, connection)
     self.yardId    = streamReadInt32(streamId)
     self.itemIndex = streamReadInt32(streamId)
+    self.vehicleObjectId = streamReadInt32(streamId)
     self.farmId    = streamReadInt32(streamId)
     self.action    = streamReadInt32(streamId)
     self:run(connection)
@@ -50,8 +53,14 @@ function TestDriveEvent:run(connection)
         if manager == nil then return end
         local yard = manager.yards[self.yardId]
         if yard == nil then return end
-        local item = yard.inventory.items[self.itemIndex]
-        if item == nil or item.vehicle == nil then return end
+        -- Resolve by vehicle network object id — itemIndex drifts between
+        -- server and clients when earlier items are removed.
+        local item, itemIndex = UsedEquipmentYards.resolveServerItem(yard, self.vehicleObjectId)
+        if item == nil then
+            Logging.warning("[UsedEquipmentYards] purchase/test-drive request for unknown yard vehicle (objectId %s) — ignored", tostring(self.vehicleObjectId))
+            return
+        end
+        if item.vehicle == nil then return end
 
         if self.action == TestDriveEvent.ACTION_START then
             self:serverStartTestDrive(item, yard)
@@ -59,25 +68,29 @@ function TestDriveEvent:run(connection)
             self:serverReturnTestDrive(item, yard)
         end
 
-        g_server:broadcastEvent(TestDriveEvent.new(self.yardId, self.itemIndex, self.farmId, self.action))
+        g_server:broadcastEvent(TestDriveEvent.new(self.yardId, itemIndex, self.farmId, self.action, self.vehicleObjectId))
         return
     end
 
     -- CLIENT: update local state to match.
     -- Try server-side inventory first (SP / listen server), then client items.
+    -- Resolve by vehicle network object id when available — itemIndex drifts
+    -- between server and clients when earlier items are removed.
     local item = nil
+    local useObjectId = self.vehicleObjectId ~= nil and self.vehicleObjectId ~= 0
     local manager = UsedEquipmentYards.yardManager
     if manager ~= nil then
         local yard = manager.yards[self.yardId]
         if yard ~= nil then
-            item = yard.inventory.items[self.itemIndex]
+            if useObjectId then
+                item = UsedEquipmentYards.resolveServerItem(yard, self.vehicleObjectId)
+            else
+                item = yard.inventory.items[self.itemIndex]
+            end
         end
     end
-    if item == nil then
-        local clientItems = UsedEquipmentYards.clientItems[self.yardId]
-        if clientItems ~= nil then
-            item = clientItems[self.itemIndex]
-        end
+    if item == nil and useObjectId then
+        item = UsedEquipmentYards.resolveClientItem(self.yardId, self.vehicleObjectId)
     end
     if item == nil or item.vehicle == nil then return end
 
@@ -93,11 +106,23 @@ end
 -- ---------------------------------------------------------------------------
 
 function TestDriveEvent:serverStartTestDrive(item, yard)
-    if item.testDrive ~= nil then return end
-    if item.testDrivenByFarms ~= nil and item.testDrivenByFarms[self.farmId] then return end
+    if item.testDrive ~= nil then
+        Logging.warning("[UsedEquipmentYards] test drive: rejected — %s at yard %d '%s' already on test drive by farm %d",
+            UsedEquipmentYards.itemLabel(item), yard.id, yard.name, item.testDrive.farmId)
+        return
+    end
+    if item.testDrivenByFarms ~= nil and item.testDrivenByFarms[self.farmId] then
+        Logging.warning("[UsedEquipmentYards] test drive: rejected — farm %d already test drove %s at yard %d '%s'",
+            self.farmId, UsedEquipmentYards.itemLabel(item), yard.id, yard.name)
+        return
+    end
 
     -- Shared: set testDrive data, remove tag, unlock.
     self:clientStartTestDrive(item)
+
+    Logging.info("[UsedEquipmentYards] test drive: farm %d started test drive of %s at yard %d '%s' — due back day %d hour %d",
+        self.farmId, UsedEquipmentYards.itemLabel(item), yard.id, yard.name,
+        item.testDrive.returnByDay, item.testDrive.returnByHour)
 end
 
 -- ---------------------------------------------------------------------------
@@ -107,8 +132,16 @@ end
 function TestDriveEvent:serverReturnTestDrive(item, yard)
     local vehicle = item.vehicle
     local td = item.testDrive
-    if td == nil then return end
-    if td.farmId ~= self.farmId then return end
+    if td == nil then
+        Logging.warning("[UsedEquipmentYards] test drive: rejected return — no active test drive on %s at yard %d '%s' (farm %d)",
+            UsedEquipmentYards.itemLabel(item, vehicle), yard.id, yard.name, self.farmId)
+        return
+    end
+    if td.farmId ~= self.farmId then
+        Logging.warning("[UsedEquipmentYards] test drive: rejected return — farm %d tried to return %s borrowed by farm %d at yard %d '%s'",
+            self.farmId, UsedEquipmentYards.itemLabel(item, vehicle), td.farmId, yard.id, yard.name)
+        return
+    end
 
     -- Kick out any player currently in the vehicle.
     if vehicle.getIsEntered ~= nil and vehicle:getIsEntered() then
@@ -151,6 +184,9 @@ function TestDriveEvent:serverReturnTestDrive(item, yard)
 
     -- Shared: update item state, re-add tag, re-lock.
     self:clientReturnTestDrive(item)
+
+    Logging.info("[UsedEquipmentYards] test drive: farm %d returned %s to yard %d '%s'",
+        self.farmId, UsedEquipmentYards.itemLabel(item, vehicle), yard.id, yard.name)
 end
 
 -- ---------------------------------------------------------------------------

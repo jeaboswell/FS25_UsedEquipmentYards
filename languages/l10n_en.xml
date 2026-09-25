@@ -26,6 +26,11 @@
         <text name="uey_purchase_title" text="Purchase Vehicle" />
         <text name="uey_purchase_confirm" text="Purchase %s for %s?" />
         <text name="uey_purchase_insufficient_funds" text="Insufficient funds." />
+        <text name="uey_purchase_failed_noYard" text="Purchase failed: this yard no longer exists." />
+        <text name="uey_purchase_failed_unknownItem" text="Purchase failed: this vehicle is no longer for sale at this yard." />
+        <text name="uey_purchase_failed_belowMin" text="Purchase failed: the yard rejected your offer." />
+        <text name="uey_purchase_failed_funds" text="Purchase failed: insufficient funds." />
+        <text name="uey_purchase_failed_generic" text="Purchase failed." />
 
         <!-- Yard config dialog -->
         <text name="uey_action_configureYard" text="Configure Yard" />

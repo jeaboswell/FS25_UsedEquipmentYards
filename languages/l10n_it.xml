@@ -27,6 +27,11 @@
         <text name="uey_purchase_title" text="Acquista veicolo" />
         <text name="uey_purchase_confirm" text="Acquistare %s per %s?" />
         <text name="uey_purchase_insufficient_funds" text="Fondi insufficienti." />
+        <text name="uey_purchase_failed_noYard" text="Acquisto non riuscito: questo piazzale non esiste più." />
+        <text name="uey_purchase_failed_unknownItem" text="Acquisto non riuscito: questo veicolo non è più in vendita in questo piazzale." />
+        <text name="uey_purchase_failed_belowMin" text="Acquisto non riuscito: il piazzale ha rifiutato la tua offerta." />
+        <text name="uey_purchase_failed_funds" text="Acquisto non riuscito: fondi insufficienti." />
+        <text name="uey_purchase_failed_generic" text="Acquisto non riuscito." />
 
         <!-- Yard config dialog -->
         <text name="uey_action_configureYard" text="Configura piazzale" />

@@ -32,7 +32,7 @@ function VehicleItemSyncEvent:writeStream(streamId, connection)
     streamWriteInt32(streamId, objectId)
 
     -- Item data needed by clients.
-    streamWriteString(streamId, item.xmlFilename or "")
+    streamWriteString(streamId, NetworkUtil.convertToNetworkFilename(item.xmlFilename or ""))
     streamWriteInt32(streamId, item.price or 0)
     streamWriteInt32(streamId, item.minPrice or item.price)
     streamWriteInt32(streamId, item.numOwners or 1)
@@ -71,7 +71,7 @@ function VehicleItemSyncEvent:readStream(streamId, connection)
     local vehicleObjectId = streamReadInt32(streamId)
 
     local clientItem = {
-        xmlFilename   = streamReadString(streamId),
+        xmlFilename   = NetworkUtil.convertFromNetworkFilename(streamReadString(streamId)),
         price         = streamReadInt32(streamId),
         minPrice      = streamReadInt32(streamId),
         numOwners     = streamReadInt32(streamId),

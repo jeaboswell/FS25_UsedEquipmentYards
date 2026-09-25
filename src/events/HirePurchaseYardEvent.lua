@@ -7,18 +7,20 @@ function HirePurchaseYardEvent.emptyNew()
     return Event.new(HirePurchaseYardEvent_mt)
 end
 
-function HirePurchaseYardEvent.new(yardId, itemIndex, farmId, leaseDeal)
+function HirePurchaseYardEvent.new(yardId, itemIndex, farmId, leaseDeal, vehicleObjectId)
     local self = HirePurchaseYardEvent.emptyNew()
     self.yardId    = yardId
     self.itemIndex = itemIndex
     self.farmId    = farmId
     self.leaseDeal = leaseDeal
+    self.vehicleObjectId = vehicleObjectId or 0
     return self
 end
 
 function HirePurchaseYardEvent:writeStream(streamId, connection)
     streamWriteInt32(streamId, self.yardId)
     streamWriteInt32(streamId, self.itemIndex)
+    streamWriteInt32(streamId, self.vehicleObjectId)
     streamWriteInt32(streamId, self.farmId)
     self.leaseDeal:writeStream(streamId, connection)
 end
@@ -26,6 +28,7 @@ end
 function HirePurchaseYardEvent:readStream(streamId, connection)
     self.yardId    = streamReadInt32(streamId)
     self.itemIndex = streamReadInt32(streamId)
+    self.vehicleObjectId = streamReadInt32(streamId)
     self.farmId    = streamReadInt32(streamId)
     local env = UsedEquipmentYards.getHirePurchaseEnv()
     self.leaseDeal = env.LeaseDeal.new()
@@ -37,16 +40,30 @@ function HirePurchaseYardEvent:run(connection)
     if not connection:getIsServer() then
         -- SERVER: validate, deduct deposit, transfer ownership, register lease deal.
         local manager = UsedEquipmentYards.yardManager
-        if manager == nil then return end
+        if manager == nil then
+            Logging.warning("[UsedEquipmentYards] hire-purchase request but yardManager is nil")
+            return
+        end
 
         local yard = manager.yards[self.yardId]
-        if yard == nil then return end
+        if yard == nil then
+            Logging.warning("[UsedEquipmentYards] hire-purchase request for unknown yard id %d — ignored", self.yardId)
+            return
+        end
 
-        local item = yard.inventory.items[self.itemIndex]
-        if item == nil then return end
+        -- Resolve by vehicle network object id — itemIndex drifts between
+        -- server and clients when earlier items are removed.
+        local item, itemIndex = UsedEquipmentYards.resolveServerItem(yard, self.vehicleObjectId)
+        if item == nil then
+            Logging.warning("[UsedEquipmentYards] purchase/test-drive request for unknown yard vehicle (objectId %s) — ignored", tostring(self.vehicleObjectId))
+            return
+        end
 
         local farm = g_farmManager:getFarmById(self.farmId)
-        if farm == nil then return end
+        if farm == nil then
+            Logging.warning("[UsedEquipmentYards] hire-purchase rejected: unknown farm id %d — ignored", self.farmId)
+            return
+        end
 
         -- Deduct store credit first.
         local creditAvailable = YardCredit.getBalance(self.farmId, self.yardId)
@@ -55,7 +72,11 @@ function HirePurchaseYardEvent:run(connection)
 
         -- The deposit comes from cash.
         local deposit = self.leaseDeal.deposit
-        if farm:getBalance() < deposit then return end
+        if farm:getBalance() < deposit then
+            Logging.warning("[UsedEquipmentYards] hire-purchase rejected: farm %d balance %d < deposit %d (price %d, yard %d)",
+                self.farmId, math.floor(farm:getBalance()), math.floor(deposit), math.floor(item.price), self.yardId)
+            return
+        end
 
         g_currentMission:addMoneyChange(-deposit, self.farmId, MoneyType.SHOP_VEHICLE_BUY, true)
         farm:changeBalance(-deposit, MoneyType.SHOP_VEHICLE_BUY)
@@ -83,12 +104,18 @@ function HirePurchaseYardEvent:run(connection)
         -- Record sale.
         UsedEquipmentYards.addRecentSale(vehicleUniqueId, item.price)
 
+        -- Capture label before removeItem clears item.vehicle.
+        local label = UsedEquipmentYards.itemLabel(item, vehicle)
+
         -- Remove from yard inventory (keep vehicle spawned).
         yard.inventory:removeItem(item, true)
 
+        Logging.info("[UsedEquipmentYards] hire-purchase: farm %d took %s from yard %d '%s' — price %d, deposit %d, credit used %d",
+            self.farmId, label, yard.id, yard.name, math.floor(item.price), math.floor(deposit), math.floor(creditUsed))
+
         -- Broadcast to all clients.
         g_server:broadcastEvent(HirePurchaseYardEvent.new(
-            self.yardId, self.itemIndex, self.farmId, self.leaseDeal))
+            self.yardId, itemIndex, self.farmId, self.leaseDeal, self.vehicleObjectId))
 
         -- Also broadcast the lease deal to HirePurchasing clients.
         local env = UsedEquipmentYards.getHirePurchaseEnv()
@@ -103,7 +130,12 @@ function HirePurchaseYardEvent:run(connection)
     if manager ~= nil then
         local yard = manager.yards[self.yardId]
         if yard ~= nil then
-            local item = yard.inventory.items[self.itemIndex]
+            local item = nil
+            if self.vehicleObjectId ~= nil and self.vehicleObjectId ~= 0 then
+                item = UsedEquipmentYards.resolveServerItem(yard, self.vehicleObjectId)
+            else
+                item = yard.inventory.items[self.itemIndex]
+            end
             if item ~= nil then
                 local vehicle = item.vehicle
                 if vehicle ~= nil then
@@ -123,5 +155,5 @@ function HirePurchaseYardEvent:run(connection)
     end
 
     -- Clean up client item registry.
-    UsedEquipmentYards.removeClientItem(self.yardId, self.itemIndex)
+    UsedEquipmentYards.removeClientItem(self.yardId, self.itemIndex, self.vehicleObjectId)
 end
